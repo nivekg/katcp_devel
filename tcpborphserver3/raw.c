@@ -1737,18 +1737,22 @@ int start_fpga_tbs(struct katcp_dispatch *d, struct bof_state *bs)
     return -1;
   }
 
+  fprintf(stderr, "start fpga calling program_bof\n");
   if(program_bof(d, bs, TBS_FPGA_CONFIG) < 0){
     log_message_katcp(d, KATCP_LEVEL_ERROR, NULL, "unable to program bit stream to %s", TBS_FPGA_CONFIG);
     return -1;
   }
 
+  fprintf(stderr, "start fpga calling status_fpga\n");
   status_fpga_tbs(d, TBS_FPGA_PROGRAMMED);
 
+  fprintf(stderr, "index bof\n");
   if(index_bof(d, bs) < 0){
     log_message_katcp(d, KATCP_LEVEL_ERROR, NULL, "unable to load register mapping");
     return -1;
   }
 
+  fprintf(stderr, "map_raw_tbs\n");
   if(map_raw_tbs(d) < 0){
     return -1;
   }
