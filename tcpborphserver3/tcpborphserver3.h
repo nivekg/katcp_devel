@@ -22,7 +22,7 @@
 #define TBS_FPGA_MEM       "/dev/roach/mem"
 #else
 #define TBS_FPGA_CONFIG    "dev-roach-config"
-#define TBS_FPGA_MEM       "dev-roach-mem"
+#define TBS_FPGA_MEM       "/dev/spifpga0.0"
 #endif
 
 #define TBS_FPGA_STATUS    "#fpga"
@@ -112,6 +112,7 @@ struct tbs_raw
   char *r_image;
   char *r_bof_dir;
   unsigned int r_top_register;
+  int r_file;
 
   int r_argc;
   char **r_argv;

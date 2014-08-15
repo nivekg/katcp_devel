@@ -390,12 +390,21 @@ int word_write_cmd(struct katcp_dispatch *d, int argc)
   shift = te->e_pos_offset;
   j = te->e_pos_base + start;
   if(shift > 0){
-    current = *((uint32_t *)(tr->r_map + j));
+    //current = *((uint32_t *)(tr->r_map + j));
+    fprintf(stderr, "attempting to lseek\n");
+    if (lseek(tr->r_file, j, SEEK_SET) < 0)
+        log_message_katcp(d, KATCP_LEVEL_ERROR, NULL, "lseek failed");
+    fprintf(stderr, "attempting to read\n");
+    if (read(tr->r_file, &current, 4) != 4)
+        log_message_katcp(d, KATCP_LEVEL_ERROR, NULL, "read failed");
     prev = current & (0xffffffff << (32 - shift));
   } else {
     prev = 0;
   }
 
+  if (lseek(tr->r_file, j, SEEK_SET) < 0)
+      log_message_katcp(d, KATCP_LEVEL_ERROR, NULL, "lseek failed");
+  /* write as many words as there are in the command */
   for(i = 3; i < argc; i++){
     if(arg_null_katcp(d, i)){
       log_message_katcp(d, KATCP_LEVEL_ERROR, NULL, "parameter %u is null", i);
@@ -406,23 +415,33 @@ int word_write_cmd(struct katcp_dispatch *d, int argc)
     update = prev | (value >> shift);
 
     log_message_katcp(d, KATCP_LEVEL_TRACE, NULL, "writing 0x%x to position 0x%x", update, j);
-    *((uint32_t *)(tr->r_map + j)) = update;
+    if (write(tr->r_file, &update, 4) != 4)
+        log_message_katcp(d, KATCP_LEVEL_ERROR, NULL, "write failed");
+
+    //*((uint32_t *)(tr->r_map + j)) = update;
+    
 
     prev = value << (32 - shift);
     j += 4;
   }
 
   if(shift > 0){
-    current = (*((uint32_t *)(tr->r_map + j))) & (0xffffffff >> shift);
+    if (read(tr->r_file, &current, 4) != 4)
+        log_message_katcp(d, KATCP_LEVEL_ERROR, NULL, "read failed");
+    if (lseek(tr->r_file, j, SEEK_SET) < 0)
+        log_message_katcp(d, KATCP_LEVEL_ERROR, NULL, "lseek failed");
+    //current = (*((uint32_t *)(tr->r_map + j))) & (0xffffffff >> shift);
     update = prev | current;
     log_message_katcp(d, KATCP_LEVEL_TRACE, NULL, "writing final, partial 0x%x to position 0x%x", update, j);
-    *((uint32_t *)(tr->r_map + j)) = update;
+    if (write(tr->r_file, &update, 4) != 4)
+        log_message_katcp(d, KATCP_LEVEL_ERROR, NULL, "write failed");
+    //*((uint32_t *)(tr->r_map + j)) = update;
   }
 
 #if 0
   msync(tr->r_map + te->e_pos_base + start, te->e_len_base, MS_INVALIDATE | MS_SYNC);
 #endif
-  msync(tr->r_map, tr->r_map_size, MS_SYNC);
+  //msync(tr->r_map, tr->r_map_size, MS_SYNC);
 
   if(check_bus_error(d) < 0){
     return KATCP_RESULT_FAIL;
@@ -565,8 +584,14 @@ int write_cmd(struct katcp_dispatch *d, int argc)
   ptr_base   = off.b_byte;
   ptr_offset = off.b_bit;
 
+  if (lseek(tr->r_file, ptr_base, SEEK_SET) < 0)
+      log_message_katcp(d, KATCP_LEVEL_ERROR, NULL, "lseek failed");
+
   if (ptr_offset > 0){
-    current = *((uint32_t *)(tr->r_map + ptr_base));
+    //current = *((uint32_t *)(tr->r_map + ptr_base));
+    fprintf(stderr, "attempting to read\n");
+    if (read(tr->r_file, &current, 4) != 4)
+        log_message_katcp(d, KATCP_LEVEL_ERROR, NULL, "read failed");
     prev    = current & (0xffffffff << (32 - ptr_offset));
   } else {
     prev    = 0;
@@ -591,7 +616,9 @@ int write_cmd(struct katcp_dispatch *d, int argc)
 
     log_message_katcp(d, KATCP_LEVEL_TRACE, NULL, "writing 0x%x to position 0x%x", update, ptr_base);
 
-    *((uint32_t *)(tr->r_map + ptr_base)) = update;
+    //*((uint32_t *)(tr->r_map + ptr_base)) = update;
+    if (write(tr->r_file, &update, 4) != 4)
+        log_message_katcp(d, KATCP_LEVEL_ERROR, NULL, "write failed");
     
     prev = value << (32 - ptr_offset);
     ptr_base += 4;
@@ -622,7 +649,9 @@ int write_cmd(struct katcp_dispatch *d, int argc)
 
       log_message_katcp(d, KATCP_LEVEL_TRACE, NULL, "writing penultimate 0x%x to position 0x%x", prev, ptr_base);
 
-      *((uint32_t *)(tr->r_map + ptr_base)) = prev;
+      //*((uint32_t *)(tr->r_map + ptr_base)) = prev;
+      if (write(tr->r_file, &update, 4) != 4)
+          log_message_katcp(d, KATCP_LEVEL_ERROR, NULL, "write failed");
 
       prev = value << (32 - ptr_offset);
       ptr_base += 4;
@@ -641,7 +670,11 @@ int write_cmd(struct katcp_dispatch *d, int argc)
     /* now write a partial destination, so need to load in some bits */
     if(remaining_bits > 0){
 
-      current = *((uint32_t *)(tr->r_map + ptr_base));
+      //current = *((uint32_t *)(tr->r_map + ptr_base));
+      if (read(tr->r_file, &current, 4) != 4)
+          log_message_katcp(d, KATCP_LEVEL_ERROR, NULL, "read failed");
+      if (lseek(tr->r_file, ptr_base, SEEK_SET) < 0)
+          log_message_katcp(d, KATCP_LEVEL_ERROR, NULL, "lseek failed");
 
       log_message_katcp(d, KATCP_LEVEL_TRACE, NULL, "read value 0x%x from 0x%x", current, ptr_base);
 
@@ -649,7 +682,9 @@ int write_cmd(struct katcp_dispatch *d, int argc)
 
       log_message_katcp(d, KATCP_LEVEL_TRACE, NULL, "writing final 0x%x to position 0x%x", update, ptr_base);
 
-      *((uint32_t *)(tr->r_map + ptr_base)) = update;
+      //*((uint32_t *)(tr->r_map + ptr_base)) = update;
+      if (write(tr->r_file, &update, 4) != 4)
+          log_message_katcp(d, KATCP_LEVEL_ERROR, NULL, "write failed");
 
     }
   }
@@ -713,7 +748,7 @@ int write_cmd(struct katcp_dispatch *d, int argc)
   } 
 #endif
 
-  msync(tr->r_map, tr->r_map_size, MS_SYNC);
+  //msync(tr->r_map, tr->r_map_size, MS_SYNC);
 
   if (buffer != NULL){
     free(buffer);
@@ -804,7 +839,11 @@ int word_read_cmd(struct katcp_dispatch *d, int argc)
   flags = KATCP_FLAG_XLONG;
 
   if(shift > 0){
-    current = *((uint32_t *)(tr->r_map + j));
+    //current = *((uint32_t *)(tr->r_map + j));
+    if (lseek(tr->r_file, j, SEEK_SET) < 0)
+        log_message_katcp(d, KATCP_LEVEL_ERROR, NULL, "lseek failed");
+    if (read(tr->r_file, &current, 4) != 4)
+        log_message_katcp(d, KATCP_LEVEL_ERROR, NULL, "read failed");
     prev = (current << shift);
     j += 4;
   } else {
@@ -813,7 +852,9 @@ int word_read_cmd(struct katcp_dispatch *d, int argc)
   }
 
   for(i = 0; i < length; i++){
-    current = *((uint32_t *)(tr->r_map + j));
+    //current = *((uint32_t *)(tr->r_map + j));
+    if (read(tr->r_file, &current, 4) != 4)
+        log_message_katcp(d, KATCP_LEVEL_ERROR, NULL, "read failed");
     /* WARNING: masking would be wise here, just in case sign extension happens */
     value = (current >> (32 - shift)) | prev;
 
@@ -986,19 +1027,33 @@ int read_register(struct katcp_dispatch *d, struct tbs_entry *te, struct katcl_b
 
 #ifdef USE_MEMCPY
     if(amount->b_bit > 0){
-      memcpy(buffer, tr->r_map + combined.start.b_byte, transfer);
+      if (lseek(tr->r_file, combined.start.b_byte, SEEK_SET) < 0)
+          log_message_katcp(d, KATCP_LEVEL_ERROR, NULL, "lseek failed");
+      if (read(tr->r_file, &buffer, transfer) != transfer)
+          log_message_katcp(d, KATCP_LEVEL_ERROR, NULL, "read failed");
+      //memcpy(buffer, tr->r_map + combined.start.b_byte, transfer);
       buffer[amount->b_byte + amount->b_bit / 8] &= (~(0xff >> (amount->b_bit % 8)));
     } else {
-      memcpy(buffer, tr->r_map + combined.start.b_byte, transfer);
+      //memcpy(buffer, tr->r_map + combined.start.b_byte, transfer);
+      if (lseek(tr->r_file, combined.start.b_byte, SEEK_SET) < 0)
+          log_message_katcp(d, KATCP_LEVEL_ERROR, NULL, "lseek failed");
+      if (read(tr->r_file, &buffer, transfer) != transfer)
+          log_message_katcp(d, KATCP_LEVEL_ERROR, NULL, "read failed");
     }
 #else 
     /* WTF moments right here: FPGA 32 bit issues */
+    if (lseek(tr->r_file, combined_start.b_byte, SEEK_SET) < 0)
+        log_message_katcp(d, KATCP_LEVEL_ERROR, NULL, "lseek failed");
     for(i = 0; i < amount->b_byte; i += 4){
-      current = *((uint32_t *)(tr->r_map + combined_start.b_byte + i));
+      //current = *((uint32_t *)(tr->r_map + combined_start.b_byte + i));
+      if (read(tr->r_file, &current, 4) != 4)
+          log_message_katcp(d, KATCP_LEVEL_ERROR, NULL, "read failed");
       memcpy(buffer + i, &current, 4);
     }
     if(amount->b_bit){
-      current = *((uint32_t *)(tr->r_map + combined_start.b_byte + i));
+      //current = *((uint32_t *)(tr->r_map + combined_start.b_byte + i));
+      if (read(tr->r_file, &current+ i, 4) != 4)
+          log_message_katcp(d, KATCP_LEVEL_ERROR, NULL, "read failed");
       current = current & (~(0xffffffff >> (amount->b_bit)));
       memcpy(buffer + i, &current, round_left);
     }
@@ -1030,7 +1085,8 @@ int read_register(struct katcp_dispatch *d, struct tbs_entry *te, struct katcl_b
   log_message_katcp(d, KATCP_LEVEL_TRACE, NULL, "complex read starting at %u:%u of 0x%x:%u maps to pos 0x%x:%u with grab %u:%u shifted by %u copied into %u bytes", start->b_byte, start->b_bit, amount->b_byte, amount->b_bit, combined_start.b_byte, combined_start.b_bit, grab_base, grab_offset, shift, transfer);
 
   mask = ~(0xffffffff << shift);
-  ptr = (uint32_t *)(tr->r_map + combined_start.b_byte);
+  //ptr = (uint32_t *)(tr->r_map + combined_start.b_byte);
+  ptr = combined_start.b_byte;
 
   prev = (ptr[0]) << shift;
   j = 1;
@@ -1613,7 +1669,8 @@ int unmap_raw_tbs(struct katcp_dispatch *d)
     return 0;
   }
 
-  munmap(tr->r_map, tr->r_map_size);
+  //munmap(tr->r_map, tr->r_map_size);
+  close(tr->r_file);
   status_fpga_tbs(d, TBS_FPGA_PROGRAMMED);
 
   tr->r_map_size = 0;
@@ -1658,15 +1715,17 @@ int map_raw_tbs(struct katcp_dispatch *d)
     return -1;
   }
 
-  tr->r_map = mmap(NULL, tr->r_map_size, PROT_READ | PROT_WRITE, MAP_SHARED, fd, 0);
+  //tr->r_map = mmap(NULL, tr->r_map_size, PROT_READ | PROT_WRITE, MAP_SHARED, fd, 0);
+  /* Chuck the file descriptor in the tbs struct for later accesses */
+  tr->r_file = fd;
 
-  if(tr->r_map == MAP_FAILED){
-    log_message_katcp(d, KATCP_LEVEL_ERROR, NULL, "unable to map file %s: %s", TBS_FPGA_MEM, strerror(errno));
-    close(fd);
-    return -1;
-  }
+  //if(tr->r_map == MAP_FAILED){
+  //  log_message_katcp(d, KATCP_LEVEL_ERROR, NULL, "unable to map file %s: %s", TBS_FPGA_MEM, strerror(errno));
+  //  close(fd);
+  //  return -1;
+  //}
 
-  close(fd); /* TODO: maybe retain file descriptor ? */
+  //close(fd); /* TODO: maybe retain file descriptor ? */
   status_fpga_tbs(d, TBS_FPGA_MAPPED);
 
   return 0;

@@ -25,10 +25,10 @@
 #define GPIO_READRAW *(gpio+13)
 
 //Perspective is from Device connected, so TDO is output from device to input into rpi
-#define JTAG_TMS 9 //MISO 	PI ---> JTAG
-#define JTAG_TDI 7 //CE1 	PI ---> JTAG
-#define JTAG_TDO 8 //CE0 	PI <--- JTAG
-#define JTAG_TCK 11 //#4 	PI ---> JTAG
+#define JTAG_TMS 27 // // 9 //MISO 	PI ---> JTAG
+#define JTAG_TDI 3  // SCL // 7 //CE1 	PI ---> JTAG
+#define JTAG_TDO 22 // // 8 //CE0 	PI <--- JTAG
+#define JTAG_TCK 17 // // 11 //#4 	PI ---> JTAG
 
 //-D DEBUG when compiling, will make all sleeps last 0.5 second, this can be used to test with LED on ports, or pushbuttons
 //Else sleeps can be reduced to increase speed

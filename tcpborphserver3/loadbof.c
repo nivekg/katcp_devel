@@ -391,6 +391,7 @@ int program_bof(struct katcp_dispatch *d, struct bof_state *bs, char *device)
 
 {
   //int dfd, rr, wr, can, need, have;
+  int rv;
   if(gzseek(bs->b_fd, bs->b_bit_offset, SEEK_SET) != (bs->b_bit_offset)){
     log_message_katcp(d, KATCP_LEVEL_ERROR, NULL, "seek to bitstream start at 0x%lx failed", bs->b_bit_offset);
     return -1;
@@ -409,7 +410,11 @@ int program_bof(struct katcp_dispatch *d, struct bof_state *bs, char *device)
   fprintf(stderr, "copying form bof\n");
   gzread(bs->b_fd, buffer, bs->b_bit_size);
 
-  return ProgramDevice(6, buffer, bs->b_bit_size);
+  rv = ProgramDevice(6, buffer, bs->b_bit_size);
+  if (rv != 0)
+      log_message_katcp(d, KATCP_LEVEL_ERROR, NULL, "Programming Failed!");
+
+  return rv;
 
 }
 //int program_bof(struct katcp_dispatch *d, struct bof_state *bs, char *device)

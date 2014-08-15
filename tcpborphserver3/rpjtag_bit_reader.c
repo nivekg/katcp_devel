@@ -71,8 +71,10 @@ int ProgramDevice(int iregs, unsigned char * buffer, int n_bytes)
 
     char dout[4];
     read_status(iregs, dout);
+    fprintf(stderr, "Dout[1] reads %d\n", dout[1]);
     while ((dout[1] & (1<<3)) == 0) //check for init_complete
     {
+        fprintf(stderr, "Dout[1] reads %d\n", dout[1]);
         read_status(iregs, dout);
     }
 
@@ -86,7 +88,7 @@ int ProgramDevice(int iregs, unsigned char * buffer, int n_bytes)
 
 	int n, m;
 
-    int offset = 85;
+    int offset = 0;
     // The first word is a dummy...
 	for(n = 0+offset; n < 4+offset; n++)
     {
@@ -123,13 +125,17 @@ int ProgramDevice(int iregs, unsigned char * buffer, int n_bytes)
     for(n=0; n<32; n++)
     {
         read_status(iregs, dout);
-        if((dout[0] & 1) != 0) //crc fail
-            fprintf(stderr, "returning -2, %d,%d", dout[0], dout[0]&1);
-            //return -2; 
-        if((dout[1] & (1<<6)) != 0) // done
+        if((dout[0] & 1) != 0) { //crc fail
+            fprintf(stderr, "CRC failed! returning -2, %d,%d\n", dout[0], dout[0]&1);
+            return -2; 
+        }
+        if((dout[1] & (1<<6)) != 0) { // done
             return 0;
-            fprintf(stderr, "returning 0, %d, %d", dout[1], dout[1]&(1<<6));
+            fprintf(stderr, "returning 0, %d, %d\n", dout[1], dout[1]&(1<<6));
+        }
+        fprintf(stderr, "No CRC fail, but done not yet asserted. Checking again %d, %d\n", dout[1], dout[1]&(1<<6));
     }
+    fprintf(stderr, "No CRC fail, but done not asserted after 32 checks. Giving up %d, %d\n", dout[1], dout[1]&(1<<6));
 
     return -1;
 }
