@@ -22,7 +22,7 @@
 #define TBS_FPGA_MEM       "/dev/roach/mem"
 #else
 #define TBS_FPGA_CONFIG    "dev-roach-config"
-#define TBS_FPGA_MEM       "/dev/spifpga0.0"
+#define TBS_FPGA_MEM       "/dev/spidev0.0"
 #endif
 
 #define TBS_FPGA_STATUS    "#fpga"

@@ -23,6 +23,8 @@
 #include "loadbof.h"
 #include "tg.h"
 
+#include "spifpga_user.h"
+
 /*********************************************************************/
 
 int status_fpga_tbs(struct katcp_dispatch *d, int status);
@@ -342,8 +344,9 @@ int word_write_cmd(struct katcp_dispatch *d, int argc)
   struct tbs_raw *tr;
   struct tbs_entry *te;
 
-  unsigned int i, start, shift, j;
-  uint32_t value, prev, update, current;
+  unsigned int i, start;
+  uint32_t value, j;
+  int resp;
   char *name;
 
   tr = get_mode_katcp(d, TBS_MODE_RAW);
@@ -387,23 +390,8 @@ int word_write_cmd(struct katcp_dispatch *d, int argc)
     return KATCP_RESULT_FAIL;
   }
 
-  shift = te->e_pos_offset;
-  j = te->e_pos_base + start;
-  if(shift > 0){
-    //current = *((uint32_t *)(tr->r_map + j));
-    fprintf(stderr, "attempting to lseek\n");
-    if (lseek(tr->r_file, j, SEEK_SET) < 0)
-        log_message_katcp(d, KATCP_LEVEL_ERROR, NULL, "lseek failed");
-    fprintf(stderr, "attempting to read\n");
-    if (read(tr->r_file, &current, 4) != 4)
-        log_message_katcp(d, KATCP_LEVEL_ERROR, NULL, "read failed");
-    prev = current & (0xffffffff << (32 - shift));
-  } else {
-    prev = 0;
-  }
+  j = (uint32_t) te->e_pos_base + start;
 
-  if (lseek(tr->r_file, j, SEEK_SET) < 0)
-      log_message_katcp(d, KATCP_LEVEL_ERROR, NULL, "lseek failed");
   /* write as many words as there are in the command */
   for(i = 3; i < argc; i++){
     if(arg_null_katcp(d, i)){
@@ -411,37 +399,15 @@ int word_write_cmd(struct katcp_dispatch *d, int argc)
       return KATCP_RESULT_FAIL;
     }
 
-    value = arg_unsigned_long_katcp(d, i);
-    update = prev | (value >> shift);
+    value = (uint32_t) arg_unsigned_long_katcp(d, i);
 
-    log_message_katcp(d, KATCP_LEVEL_TRACE, NULL, "writing 0x%x to position 0x%x", update, j);
-    if (write(tr->r_file, &update, 4) != 4)
-        log_message_katcp(d, KATCP_LEVEL_ERROR, NULL, "write failed");
+    log_message_katcp(d, KATCP_LEVEL_TRACE, NULL, "writing 0x%x to position 0x%x", value, j);
+    resp = write_word(tr->r_file, j, value);
+    if (resp != 4)
+        log_message_katcp(d, KATCP_LEVEL_ERROR, NULL, "write failed with response %d", resp);
 
-    //*((uint32_t *)(tr->r_map + j)) = update;
-    
-
-    prev = value << (32 - shift);
     j += 4;
   }
-
-  if(shift > 0){
-    if (read(tr->r_file, &current, 4) != 4)
-        log_message_katcp(d, KATCP_LEVEL_ERROR, NULL, "read failed");
-    if (lseek(tr->r_file, j, SEEK_SET) < 0)
-        log_message_katcp(d, KATCP_LEVEL_ERROR, NULL, "lseek failed");
-    //current = (*((uint32_t *)(tr->r_map + j))) & (0xffffffff >> shift);
-    update = prev | current;
-    log_message_katcp(d, KATCP_LEVEL_TRACE, NULL, "writing final, partial 0x%x to position 0x%x", update, j);
-    if (write(tr->r_file, &update, 4) != 4)
-        log_message_katcp(d, KATCP_LEVEL_ERROR, NULL, "write failed");
-    //*((uint32_t *)(tr->r_map + j)) = update;
-  }
-
-#if 0
-  msync(tr->r_map + te->e_pos_base + start, te->e_len_base, MS_INVALIDATE | MS_SYNC);
-#endif
-  //msync(tr->r_map, tr->r_map_size, MS_SYNC);
 
   if(check_bus_error(d) < 0){
     return KATCP_RESULT_FAIL;
@@ -458,8 +424,7 @@ int write_cmd(struct katcp_dispatch *d, int argc)
   struct katcl_byte_bit off, len;
 
   uint32_t *buffer;
-  unsigned int blen, ptr_base, ptr_offset, i, prefix_bits, register_bits, start_bits, copy_bits, copy_words_floor, remaining_bits;
-  uint32_t current, prev, value, update;
+  unsigned int blen, register_bits, start_bits, copy_bits;
 
   char *name;
 
@@ -581,174 +546,9 @@ int write_cmd(struct katcp_dispatch *d, int argc)
 
   log_message_katcp(d, KATCP_LEVEL_TRACE, NULL, "writing to %s@0x%lx:%d: start position 0x%lx:%d, payload length 0x%lx:%d, register size 0x%lx:%d", name, te->e_pos_base, te->e_pos_offset, off.b_byte, off.b_bit, len.b_byte, len.b_bit, te->e_len_base, te->e_len_offset);
 
-  ptr_base   = off.b_byte;
-  ptr_offset = off.b_bit;
-
-  if (lseek(tr->r_file, ptr_base, SEEK_SET) < 0)
-      log_message_katcp(d, KATCP_LEVEL_ERROR, NULL, "lseek failed");
-
-  if (ptr_offset > 0){
-    //current = *((uint32_t *)(tr->r_map + ptr_base));
-    fprintf(stderr, "attempting to read\n");
-    if (read(tr->r_file, &current, 4) != 4)
-        log_message_katcp(d, KATCP_LEVEL_ERROR, NULL, "read failed");
-    prev    = current & (0xffffffff << (32 - ptr_offset));
-  } else {
-    prev    = 0;
-  }
-
-#ifdef DEBUG
-  if((off.b_byte % 4) || (off.b_bit >= 32)){
-    fprintf(stderr, "write: word normalise didn't\n");
-    abort();
-  }
-#endif
-
-  copy_words_floor = len.b_byte / 4;
-
-  /* the easy part, whole words */
-  for (i = 0; i < copy_words_floor; i++){
-
-    /* implicit is a ntohs */
-    value = buffer[i];
-
-    update = prev | (value >> ptr_offset);
-
-    log_message_katcp(d, KATCP_LEVEL_TRACE, NULL, "writing 0x%x to position 0x%x", update, ptr_base);
-
-    //*((uint32_t *)(tr->r_map + ptr_base)) = update;
-    if (write(tr->r_file, &update, 4) != 4)
+  if (bulk_write(tr->r_file, off.b_byte, len.b_byte, buffer) != len.b_byte){
         log_message_katcp(d, KATCP_LEVEL_ERROR, NULL, "write failed");
-    
-    prev = value << (32 - ptr_offset);
-    ptr_base += 4;
   }
-
-  /* WARNING, WARNING, WARNING: still not correct from down here onwards */
-
-  /* now sort out the left over bits */
-
-  if(copy_words_floor > 0){
-    remaining_bits = ptr_offset + copy_bits - (copy_words_floor * 32);
-    prefix_bits = 0; 
-  } else {
-    /* no full word writes completed is special, we have to account for leading bits from fpga when we write out final word */
-    remaining_bits = copy_bits;
-    prefix_bits = ptr_offset;
-  }
-
-  if(remaining_bits > 0){
-
-    value = buffer[i];
-    prev = prev | (value >> ptr_offset);
-
-    log_message_katcp(d, KATCP_LEVEL_TRACE, NULL, "have %u bits outstanding (prefix %u), holdover is 0x%x", remaining_bits, prefix_bits, prev);
-
-    /* two steps: the first case where we get to write another full destination word */
-    if((ptr_offset + remaining_bits) >= 32){
-
-      log_message_katcp(d, KATCP_LEVEL_TRACE, NULL, "writing penultimate 0x%x to position 0x%x", prev, ptr_base);
-
-      //*((uint32_t *)(tr->r_map + ptr_base)) = prev;
-      if (write(tr->r_file, &update, 4) != 4)
-          log_message_katcp(d, KATCP_LEVEL_ERROR, NULL, "write failed");
-
-      prev = value << (32 - ptr_offset);
-      ptr_base += 4;
-
-      remaining_bits = (ptr_offset + remaining_bits - 32);
-    }
-
-
-#ifdef DEBUG
-    if(remaining_bits >= 32){
-      fprintf(stderr, "write: logic problem, remaining bits too large at %u", remaining_bits);
-      abort();
-    }
-#endif
-
-    /* now write a partial destination, so need to load in some bits */
-    if(remaining_bits > 0){
-
-      //current = *((uint32_t *)(tr->r_map + ptr_base));
-      if (read(tr->r_file, &current, 4) != 4)
-          log_message_katcp(d, KATCP_LEVEL_ERROR, NULL, "read failed");
-      if (lseek(tr->r_file, ptr_base, SEEK_SET) < 0)
-          log_message_katcp(d, KATCP_LEVEL_ERROR, NULL, "lseek failed");
-
-      log_message_katcp(d, KATCP_LEVEL_TRACE, NULL, "read value 0x%x from 0x%x", current, ptr_base);
-
-      update = (prev & (0xffffffff << (32 - (prefix_bits + remaining_bits)))) | (current & (0xffffffff >> (prefix_bits + remaining_bits)));
-
-      log_message_katcp(d, KATCP_LEVEL_TRACE, NULL, "writing final 0x%x to position 0x%x", update, ptr_base);
-
-      //*((uint32_t *)(tr->r_map + ptr_base)) = update;
-      if (write(tr->r_file, &update, 4) != 4)
-          log_message_katcp(d, KATCP_LEVEL_ERROR, NULL, "write failed");
-
-    }
-  }
-
-#if 0
-
-  if (len.b_bit > 0 && blen > len.b_byte){
-
-#if 0
-    log_message_katcp(d, KATCP_LEVEL_ERROR, NULL, "you are using extended features of a temp hack. Don't");
-    return KATCP_RESULT_FAIL;
-#else 
-
-
-
-    current = *((uint8_t *)(tr->r_map + ptr_base));
-    value = buffer[i] & (0xff << (8 - len.b_bit));
-    update = prev | (value >> ptr_offset) | (current & (0xff >> (ptr_offset + len.b_bit)));
-
-    log_message_katcp(d, KATCP_LEVEL_TRACE, NULL, "writing partial len 0x%x to position 0x%x", update, ptr_base);
-#ifdef DEBUG
-    fprintf(stderr, "raw write: [%d] got 0x%x write 0x%x\n", i, buffer[i], update);
-#endif
-
-    *((uint8_t *)(tr->r_map + ptr_base)) = update;
-
-    if (ptr_offset > 0){
-
-#ifdef DEBUG
-      fprintf(stderr, "raw partial with ptr_offset some new data might need to go to next byte\n");
-#endif
-
-      temp.b_byte = 0;
-      temp.b_bit  = ptr_offset + len.b_bit;
-      byte_normalise(&temp);
-
-      if (temp.b_byte > 0 && temp.b_bit > 0){
-        prev = value << (8 - temp.b_bit);
-        ptr_base += 1;
-        if (ptr_base < te->e_pos_base + te->e_len_base){
-          current = (*((uint8_t *)(tr->r_map + ptr_base))) & (0xff >> temp.b_bit);
-          update = prev | current;
-          log_message_katcp(d, KATCP_LEVEL_TRACE, NULL, "writing final, partial 0x%x to position 0x%x", update, ptr_base);
-          *((uint8_t *)(tr->r_map + ptr_base)) = update;
-        } 
-      } 
-    }
-  } else if (ptr_offset > 0 && (ptr_base < te->e_pos_base + te->e_len_base)){
-
-    current = (*((uint8_t *)(tr->r_map + ptr_base))) & (0xff >> ptr_offset);
-    update = prev | current;
-
-    log_message_katcp(d, KATCP_LEVEL_TRACE, NULL, "writing final, partial 0x%x to position 0x%x", update, ptr_base);
-#ifdef DEBUG
-    fprintf(stderr, "raw write: final write 0x%x\n", update);
-#endif
-
-    *((uint8_t *)(tr->r_map + ptr_base)) = update;
-
-#endif
-  } 
-#endif
-
-  //msync(tr->r_map, tr->r_map_size, MS_SYNC);
 
   if (buffer != NULL){
     free(buffer);
@@ -766,8 +566,8 @@ int word_read_cmd(struct katcp_dispatch *d, int argc)
   struct tbs_raw *tr;
   struct tbs_entry *te;
   char *name;
-  uint32_t value, prev, current;
-  unsigned int length, start, i, j, shift, flags;
+  uint32_t value, j;
+  unsigned int length, start, i, flags;
 
   tr = get_mode_katcp(d, TBS_MODE_RAW);
   if(tr == NULL){
@@ -826,8 +626,7 @@ int word_read_cmd(struct katcp_dispatch *d, int argc)
     return KATCP_RESULT_FAIL;
   }
 
-  j = te->e_pos_base + (start * 4);
-  shift = te->e_pos_offset;
+  j = (uint32_t) te->e_pos_base + (start * 4);
 
   log_message_katcp(d, KATCP_LEVEL_DEBUG, NULL, "attempting to read %d words from fpga at 0x%x", length, j);
 
@@ -838,27 +637,12 @@ int word_read_cmd(struct katcp_dispatch *d, int argc)
   append_string_katcp(d, KATCP_FLAG_STRING, KATCP_OK);
   flags = KATCP_FLAG_XLONG;
 
-  if(shift > 0){
-    //current = *((uint32_t *)(tr->r_map + j));
-    if (lseek(tr->r_file, j, SEEK_SET) < 0)
-        log_message_katcp(d, KATCP_LEVEL_ERROR, NULL, "lseek failed");
-    if (read(tr->r_file, &current, 4) != 4)
-        log_message_katcp(d, KATCP_LEVEL_ERROR, NULL, "read failed");
-    prev = (current << shift);
-    j += 4;
-  } else {
-    shift = 32;
-    prev = 0;
-  }
-
   for(i = 0; i < length; i++){
     //current = *((uint32_t *)(tr->r_map + j));
-    if (read(tr->r_file, &current, 4) != 4)
+    if (read_word(tr->r_file, j, &value) != 4)
         log_message_katcp(d, KATCP_LEVEL_ERROR, NULL, "read failed");
     /* WARNING: masking would be wise here, just in case sign extension happens */
-    value = (current >> (32 - shift)) | prev;
 
-    prev = (current << shift);
     j += 4;
     if(i + 1 >= length){
       flags |= KATCP_FLAG_LAST;
@@ -1150,6 +934,7 @@ int read_cmd(struct katcp_dispatch *d, int argc)
 
   gettimeofday(&then, NULL);
 #endif
+  log_message_katcp(d, KATCP_LEVEL_TRACE, NULL, "read_cmd invoked");
 
   tr = get_mode_katcp(d, TBS_MODE_RAW);
   if(tr == NULL){
@@ -1213,7 +998,7 @@ int read_cmd(struct katcp_dispatch *d, int argc)
     return KATCP_RESULT_FAIL;
   }
 
-  result = read_register(d, te, &start, &amount, ptr, space);
+  result = bulk_read(tr->r_file, te->e_pos_base + te->e_pos_offset + start.b_byte, space, ptr);
 
   if(result != space){
     log_message_katcp(d, KATCP_LEVEL_ERROR, NULL, "requested %u bytes but got %d", space, result);
@@ -1233,186 +1018,6 @@ int read_cmd(struct katcp_dispatch *d, int argc)
   check_bus_error(d);
 
   return KATCP_RESULT_OWN;
-
-#if 0
-  /* normalise, could have been specified in words, with 32 bits in offset */
-  make_bb_katcl(&reg_start, te->e_pos_base, te->e_pos_offset);
-  word_normalise_bb_katcl(&reg_start);
-  
-  make_bb_katcl(&reg_len, te->e_len_base, te->e_len_offset);
-  word_normalise_bb_katcl(&reg_len);
-
-  /* offensive programming */
-  te = NULL;
-
-  if(add_bb_katcl(&sum, &reg_start, &reg_len) < 0){
-    log_message_katcp(d, KATCP_LEVEL_ERROR, NULL, "register %s definition wraps in address space", name);
-    return KATCP_RESULT_FAIL;
-  }
-
-  make_bb_katcl(&limit, tr->r_map_size, 0);
-  word_normalise_bb_katcl(&limit);
-
-  if(exceeds_bb_katcl(&sum, &limit)){
-    log_message_katcp(d, KATCP_LEVEL_ERROR, NULL, "register %s (0x%x:%x + 0x%x:%x) falls outside mapped fpga range", name, reg_start.b_byte, reg_start.b_bit, reg_len.b_byte, reg_len.b_bit);
-    return KATCP_RESULT_FAIL;
-  }
-
-  if(add_bb_katcl(&size, &read_start, &want) < 0){
-    log_message_katcp(d, KATCP_LEVEL_ERROR, NULL, "read request for %s wraps in address space", name);
-    return KATCP_RESULT_FAIL;
-  }
-  word_normalise_bb_katcl(&size);
-
-  if(exceeds_bb_katcl(&size, &reg_len)){
-    log_message_katcp(d, KATCP_LEVEL_ERROR, NULL, "read request of %s exceeds size available (request 0x%x:%x at 0x%x:%x larger than 0x%x:%x", name, want.b_byte, want.b_bit, read_start.b_byte, want.b_bit, reg_len.b_byte, reg_len.b_bit);
-    return KATCP_RESULT_FAIL;
-  }
-
-  if((want.b_byte <= 0) && (want.b_bit <= 0)){
-    log_message_katcp(d, KATCP_LEVEL_ERROR, NULL, "zero read request length on register %s", name);
-    return KATCP_RESULT_FAIL;
-  }
-
-  if(add_bb_katcl(&combined_start, &reg_start, &read_start) < 0){
-    log_message_katcp(d, KATCP_LEVEL_ERROR, NULL, "register %s start wraps in address space", name);
-    return KATCP_RESULT_FAIL;
-  }
-  word_normalise_bb_katcl(&combined_start);
-
-
-  log_message_katcp(d, KATCP_LEVEL_TRACE, NULL, "reading %s at 0x%x:%u, combined 0x%x:%u", name, read_start.byte, read_start.bit, combined_start.b_byte, combined_start.b_bit);
-
-#if 0
-  log_message_katcp(d, KATCP_LEVEL_DEBUG, NULL, "reading %s (%u:%u) starting at %u:%u amount %u:%u", name, pos_base, pos_offset, start_base, start_offset, want_base, want_offset);
-#endif
-
-  ptr = tr->r_map;
-
-  if((combined_start.b_bit == 0) && (want.b_bit == 0)){ 
-    log_message_katcp(d, KATCP_LEVEL_TRACE, NULL, "fast read, start at 0x%x, read %u complete bytes", combined_start.b_byte, want.b_byte);
-    /* FAST: no bit offset (start at byte, read complete bytes) => no shifts => no alloc, no copy */
-
-    results[0] = prepend_reply_katcp(d);
-    results[1] = append_string_katcp(d, KATCP_FLAG_STRING, KATCP_OK);
-    results[2] = append_buffer_katcp(d, KATCP_FLAG_BUFFER | KATCP_FLAG_LAST, ptr + combined_start.b_byte, want.b_byte);
-
-#ifdef DEBUG
-    check_read_results(results, want.b_byte);
-#endif
-
-#ifdef PROFILE
-    gettimeofday(&now, NULL);
-    sub_time_katcp(&delta, &now, &then);
-    log_message_katcp(d, KATCP_LEVEL_DEBUG, NULL, "fast read of %u bytes took %lu.%06lus", want_base, delta.tv_sec, delta.tv_usec);
-#endif
-
-    check_bus_error(d);
-
-    /* END easy case */
-    return KATCP_RESULT_OWN;
-  }
-
-  /* more complicated cases... bit ops */
-  buffer = malloc(want_base + 2);
-  if(buffer == NULL){
-    log_message_katcp(d, KATCP_LEVEL_ERROR, NULL, "unable to allocate %u bytes to extract register %s", want_base + 2, name);
-    return KATCP_RESULT_FAIL;
-  }
-
-  if(combined_offset == 0){ 
-    log_message_katcp(d, KATCP_LEVEL_TRACE, NULL, "medium read, start at %u, read %u complete bytes and %u bits", combined_base, want_base, want_offset);
-    /* MEDIUM: start at byte, read incomplete bytes => alloc, copy and clear but no shift  */
-#ifdef DEBUG
-    if((want_offset == 0) || (want_offset >= 8)){
-      fprintf(stderr, "logic problem: want offset %u unreasonable\n", want_offset);
-      abort();
-    }
-#endif
-    memcpy(buffer, ptr + combined_base, want_base + 1);
-    buffer[want_base] = buffer[want_base] & (0xff << (8 - want_offset));
-
-    results[0] = prepend_reply_katcp(d);
-    results[1] = append_string_katcp(d, KATCP_FLAG_STRING, KATCP_OK);
-    results[2] = append_buffer_katcp(d, KATCP_FLAG_BUFFER | KATCP_FLAG_LAST, buffer, want_base + 1);
-
-    free(buffer);
-
-#ifdef DEBUG
-    check_read_results(results, want_base + 1);
-#endif
-    check_bus_error(d);
-
-    return KATCP_RESULT_OWN;
-  }
-
-#ifdef DEBUG
-  if(combined_offset <= 0){
-    fprintf(stderr, "raw: logic problem: expected to handle the complicated stage\n");
-    abort();
-  }
-#endif
-
-  /* COMPLEX: start at bit offset, read arb bytes and bits => alloc, shift => copy */
-
-  shift = combined_offset;
-  grab_base = want_base;
-  grab_offset = combined_offset + want_offset;
-
-  if(grab_offset > 8){
-    grab_offset -= 8;
-    grab_base++;
-  }
-
-  mask = ~(0xff << shift);
-  j = combined_base;
-
-  prev = (ptr[j]) << shift;
-  j++;
-
-  i = 0;
-
-  log_message_katcp(d, KATCP_LEVEL_TRACE, NULL, "complex read, partial first byte shifted is now 0x%02x (shift %u, mask 0x%02x)", prev, shift, mask);
-
-  while(i < grab_base){
-    current = ptr[j];
-
-    buffer[i] = prev | (mask & (current >> (8 - shift)));
-  
-    prev = current << shift;
-
-    i++;
-    j++;
-  }
-
-  if(want_offset){
-    tail_mask = 0xff << (8 - want_offset);
-
-    if(grab_base > 0){
-      current = ptr[j];
-      buffer[i] = (prev | (mask & (current >> (8 - shift)))) & tail_mask;
-    } else {
-      buffer[i] = prev & tail_mask;
-    }
-
-    log_message_katcp(d, KATCP_LEVEL_TRACE, NULL, "complex read, final byte (%u) needs mask 0x%02x, prev is 0x%02x, result is 0x%02x", i, tail_mask, prev, buffer[i]);
-
-    i++;
-  }
-
-  results[0] = prepend_reply_katcp(d);
-  results[1] = append_string_katcp(d, KATCP_FLAG_STRING, KATCP_OK);
-  results[2] = append_buffer_katcp(d, KATCP_FLAG_BUFFER | KATCP_FLAG_LAST, buffer, i);
-
-  free(buffer);
-
-#ifdef DEBUG
-  check_read_results(results, want_base + 1);
-#endif
-  check_bus_error(d);
-
-  return KATCP_RESULT_OWN;
-#endif
 }
 
 int fpgastatus_cmd(struct katcp_dispatch *d, int argc)
@@ -1715,9 +1320,9 @@ int map_raw_tbs(struct katcp_dispatch *d)
     return -1;
   }
 
-  //tr->r_map = mmap(NULL, tr->r_map_size, PROT_READ | PROT_WRITE, MAP_SHARED, fd, 0);
   /* Chuck the file descriptor in the tbs struct for later accesses */
   tr->r_file = fd;
+  config_spi();
 
   //if(tr->r_map == MAP_FAILED){
   //  log_message_katcp(d, KATCP_LEVEL_ERROR, NULL, "unable to map file %s: %s", TBS_FPGA_MEM, strerror(errno));
