@@ -13,6 +13,7 @@
 #include <sys/mman.h>
 #include <sys/stat.h>
 #include <sys/time.h>
+#include <arpa/inet.h>
 
 #include <katpriv.h>
 #include <katcp.h>
@@ -424,6 +425,7 @@ int write_cmd(struct katcp_dispatch *d, int argc)
   struct katcl_byte_bit off, len;
 
   uint32_t *buffer;
+  int i;
   unsigned int blen, register_bits, start_bits, copy_bits;
 
   char *name;
@@ -545,6 +547,10 @@ int write_cmd(struct katcp_dispatch *d, int argc)
   word_normalise_bb_katcl(&off);
 
   log_message_katcp(d, KATCP_LEVEL_TRACE, NULL, "writing to %s@0x%lx:%d: start position 0x%lx:%d, payload length 0x%lx:%d, register size 0x%lx:%d", name, te->e_pos_base, te->e_pos_offset, off.b_byte, off.b_bit, len.b_byte, len.b_bit, te->e_len_base, te->e_len_offset);
+
+  for (i=0; i<len.b_byte/4; i++) {
+      buffer[i] = ntohl(buffer[i]);
+  }
 
   if (bulk_write(tr->r_file, off.b_byte, len.b_byte, buffer) != len.b_byte){
         log_message_katcp(d, KATCP_LEVEL_ERROR, NULL, "write failed");
@@ -927,8 +933,8 @@ int read_cmd(struct katcp_dispatch *d, int argc)
   struct tbs_entry *te;
   char *name;
   unsigned int space;
-  void *ptr;
-  int results[3], result;
+  uint32_t *ptr;
+  int results[3], result, i;
 #ifdef PROFILE
   struct timeval then, now, delta;
 
@@ -1004,6 +1010,10 @@ int read_cmd(struct katcp_dispatch *d, int argc)
     log_message_katcp(d, KATCP_LEVEL_ERROR, NULL, "requested %u bytes but got %d", space, result);
     free(ptr);
     return KATCP_RESULT_FAIL;
+  }
+
+  for (i=0; i < space / 4; i++){
+      ptr[i] = htonl(ptr[i]);
   }
 
   results[0] = prepend_reply_katcp(d);
