@@ -55,7 +55,7 @@ int write_word(int fd, uint32_t addr, uint32_t val)
 		.bits_per_word = bits,
 	};
 
-    
+
     fcmd->cmd = 0x8F; //write command, all byte enables=1
     fcmd->addr = addr;
     fcmd->din = val;
@@ -87,7 +87,8 @@ int bulk_read(int fd, uint32_t start_addr, unsigned int n_bytes, uint32_t *buf)
 
     struct fpga_spi_cmd *fcmd, *fcmd_loop, *fresp, *fresp_loop;
     struct spi_ioc_transfer *tr, *tr_loop;
-    int spidev_ret, fpga_ret;
+    int spidev_ret = 0;
+    int fpga_ret = 0;
     int read_bytes = 0;
     unsigned int *buf_loop;
 
@@ -125,6 +126,7 @@ int bulk_read(int fd, uint32_t start_addr, unsigned int n_bytes, uint32_t *buf)
         return -1;
     }
 
+    int cs_change = 0;
     for (n=0; n<n_bursts; n++)
     {
         for (m=0, fcmd_loop=fcmd, fresp_loop=fresp, tr_loop=tr; m<n_trans_per_buf; m++, fcmd_loop++, fresp_loop++, tr_loop++)
@@ -132,6 +134,19 @@ int bulk_read(int fd, uint32_t start_addr, unsigned int n_bytes, uint32_t *buf)
             if (tx_word_cnt == n_transfers)
             {
                 break;
+            }
+
+            if (tx_word_cnt == n_transfers - 1)
+            {
+                cs_change = 0;
+            }
+            else if (m == n_trans_per_buf - 1)
+            {
+                cs_change = 0;
+            }
+            else
+            {
+                cs_change = 1;
             }
 
             fcmd_loop->cmd = 0x0F; //read command, all byte enables =1
@@ -145,12 +160,12 @@ int bulk_read(int fd, uint32_t start_addr, unsigned int n_bytes, uint32_t *buf)
             tr_loop->delay_usecs = delay;
             tr_loop->speed_hz = speed;
             tr_loop->bits_per_word = bits;
-            tr_loop->cs_change = 1;
+            tr_loop->cs_change = cs_change;
 
             tx_word_cnt++;
 
         }
-        
+
         //printf("Sending SPI message burst %d n_messages: %d\n", n, m);
 	    spidev_ret = ioctl(fd, SPI_IOC_MESSAGE(m), tr);
     	if (spidev_ret < 1)
@@ -158,11 +173,15 @@ int bulk_read(int fd, uint32_t start_addr, unsigned int n_bytes, uint32_t *buf)
 		    printf("can't send spi message! (error %d)\n", spidev_ret);
             return spidev_ret;
         }
-        
+        else
+        {
+        }
+
         for (m=0, fresp_loop=fresp, buf_loop=buf; m<n_trans_per_buf; m++, fresp_loop++, buf_loop++)
         {
             //memcpy(buf + (rx_word_cnt++), &fresp_loop->dout, sizeof(unsigned int));
             //printf("readback value fresp_loop->dout: %u\n", fresp_loop->dout);
+
             *(buf + rx_word_cnt) = fresp_loop->dout;
             fpga_ret = fpga_ret | fresp_loop->resp;
             if (fresp_loop->resp == 143)
@@ -187,7 +206,8 @@ int bulk_write(int fd, uint32_t start_addr, unsigned int n_bytes, uint32_t *buf)
 
     struct fpga_spi_cmd *fcmd, *fcmd_loop, *fresp, *fresp_loop;
     struct spi_ioc_transfer *tr, *tr_loop;
-    int spidev_ret, fpga_ret;
+    int spidev_ret = 0;
+    int fpga_ret = 0;
     int written_bytes = 0;
     unsigned int *buf_loop;
 
@@ -225,6 +245,7 @@ int bulk_write(int fd, uint32_t start_addr, unsigned int n_bytes, uint32_t *buf)
         return -1;
     }
 
+    int cs_change = 0;
     for (n=0; n<n_bursts; n++)
     {
         for (m=0, buf_loop=buf, fcmd_loop=fcmd, fresp_loop=fresp, tr_loop=tr; m<n_trans_per_buf; m++, buf_loop++, fcmd_loop++, fresp_loop++, tr_loop++)
@@ -232,6 +253,19 @@ int bulk_write(int fd, uint32_t start_addr, unsigned int n_bytes, uint32_t *buf)
             if (tx_word_cnt == n_transfers)
             {
                 break;
+            }
+
+            if (tx_word_cnt == n_transfers - 1)
+            {
+                cs_change = 0;
+            }
+            else if (m == n_trans_per_buf - 1)
+            {
+                cs_change = 0;
+            }
+            else
+            {
+                cs_change = 1;
             }
 
             fcmd_loop->cmd = 0x8F; //write command, all byte enables =1
@@ -246,12 +280,12 @@ int bulk_write(int fd, uint32_t start_addr, unsigned int n_bytes, uint32_t *buf)
             tr_loop->delay_usecs = delay;
             tr_loop->speed_hz = speed;
             tr_loop->bits_per_word = bits;
-            tr_loop->cs_change = 1;
+            tr_loop->cs_change = cs_change;
 
             tx_word_cnt++;
 
         }
-        
+
         //printf("Sending SPI message burst %d n_messages: %d\n", n, m);
 	    spidev_ret = ioctl(fd, SPI_IOC_MESSAGE(m), tr);
     	if (spidev_ret < 1)
@@ -259,7 +293,7 @@ int bulk_write(int fd, uint32_t start_addr, unsigned int n_bytes, uint32_t *buf)
 		    printf("can't send spi message! (error %d)\n", spidev_ret);
             return spidev_ret;
         }
-        
+
         for (m=0, fresp_loop=fresp; m<n_trans_per_buf; m++, fresp_loop++)
         {
             if (fresp_loop->resp == 143)
@@ -285,7 +319,8 @@ int read_word(int fd, uint32_t addr, uint32_t *val)
 
     struct fpga_spi_cmd *fcmd;
     struct fpga_spi_cmd *fresp;
-    int spidev_ret, fpga_ret;
+    int spidev_ret = 0;
+    int fpga_ret = 0;
 
     fcmd = malloc(sizeof(struct fpga_spi_cmd));
     if (!fcmd)
@@ -310,7 +345,7 @@ int read_word(int fd, uint32_t addr, uint32_t *val)
 		.bits_per_word = bits,
 	};
 
-    
+
     fcmd->cmd = 0x0F; //read command, all byte enables=1
     fcmd->addr = addr;
     fcmd->din = 0;
