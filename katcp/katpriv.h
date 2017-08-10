@@ -7,6 +7,8 @@
 #include <sys/time.h>
 #include <sys/types.h>
 
+#include <avltree.h>
+
 #ifdef __cplusplus
 extern "C" {
 #endif
@@ -148,6 +150,9 @@ struct katcp_acquire{
   struct timeval a_current; /* current rate */
   struct timeval a_limit;   /* fastest update rate */
   struct timeval a_last;    /* last time value was acquired */
+#ifdef KATCP_EXPERIMENTAL
+  struct timeval a_real;    /* time which sensor was actually read */
+#endif
 
   void *a_local;
   void (*a_release)(struct katcp_dispatch *d, struct katcp_acquire *a);
@@ -413,14 +418,155 @@ struct katcp_notice{
 struct katcp_arb{
   char *a_name;
   int a_fd;
+  
+  unsigned int a_type;
 
-  unsigned int a_mode;
+  unsigned short a_reap;
+  unsigned short a_mode;
+
   int (*a_run)(struct katcp_dispatch *d, struct katcp_arb *a, unsigned int mode);
   void *a_data;
 };
 
+#ifdef KATCP_EXPERIMENTAL
+
 /* duplex structures: was supposed to be called duplex, but flat is punnier */
 /********************************************************************/
+
+#define KATCP_VRT_GONE    ((unsigned short)(-1))
+
+#define KATCP_VRT_STRING    0
+#define KATCP_VRT_TREE      1
+#define KATCP_VRT_ARRAY     2
+#define KATCP_MAX_VRT       3
+
+
+/* flags need to be contigous, flag_from_string_vrbl_katcp needs that */
+
+#define KATCP_VRF_NONE     0
+#define KATCP_VRF_ENV   0x01  /* exported to environment */
+#define KATCP_VRF_VER   0x02  /* a version variable */
+#define KATCP_VRF_SEN   0x04  /* a variable visible as a sensor */
+#define KATCP_VRF_FLX   0x08  /* type can change */
+#define KATCP_VRF_HID   0x10  /* hidden */
+#define KATCP_VRF_ROM   0x20  /* no overwrite */
+
+#define KATCP_MASK_VRF  0x1f  /* mask of all flags */
+
+/* other possible options */
+#if 0
+#define KATCP_VRF_COW         /* copy on write */
+#define KATCP_VRF_RO          /* readonly */
+#endif
+
+#define KATCP_VRC_VERSION_VERSION ":version"
+#define KATCP_VRC_VERSION_BUILD   ":build"
+
+#define KATCP_VRC_SENSOR_VALUE    ":value"
+#define KATCP_VRC_SENSOR_STATUS   ":status"
+#define KATCP_VRC_SENSOR_HELP     ":help"
+#define KATCP_VRC_SENSOR_UNITS    ":units"
+#define KATCP_VRC_SENSOR_TYPE     ":type"
+#define KATCP_VRC_SENSOR_RANGE    ":range"
+#define KATCP_VRC_SENSOR_TIME     ":time"
+#if 0 /* unused - causes unexpected namespace collisions */
+#define KATCP_VRC_SENSOR_PREFIX   ":prefix"
+#endif
+
+struct katcp_vrbl_payload;
+
+struct katcp_vrbl_map_item{
+  char *m_key;
+  struct katcp_vrbl_payload *m_value;
+};
+
+struct katcp_vrbl_array{
+  struct katcp_vrbl_payload **a_elements;
+  unsigned int a_size;
+};
+
+struct katcp_vrbl_payload{
+  unsigned short p_type;
+  union{
+    char *u_string;
+    unsigned int u_integer;
+    struct avl_tree *u_tree;
+    struct katcp_vrbl_array u_array;
+  } p_union;
+};
+
+struct katcp_vrbl{
+  char *v_name; /* not always set, never owned */
+
+  unsigned short v_status;
+  unsigned short v_flags;
+
+#if 1
+  /* unsure where this is going to be used */
+  int (*v_refresh)(struct katcp_dispatch *d, void *state, char *name, struct katcp_vrbl *vx);
+#endif
+  int (*v_change)(struct katcp_dispatch *d, void *state, char *name, struct katcp_vrbl *vx);
+  void (*v_release)(struct katcp_dispatch *d, void *state, char *name, struct katcp_vrbl *vx);
+
+  struct katcp_vrbl_payload *v_payload;
+
+  void *v_extra;
+};
+
+struct katcp_region{
+  struct avl_tree *r_tree;
+};
+
+struct katcp_subscribe{
+  struct katcp_vrbl *s_variable;
+  struct katcp_endpoint *s_endpoint;
+  unsigned int s_strategy;
+
+  /* for time, last time updated, next time when ... */
+};
+
+struct katcp_wit{
+  unsigned int w_magic;
+  struct katcp_endpoint *w_endpoint;
+  struct katcp_subscribe **w_vector;
+  unsigned int w_size;
+
+  /* todo - timeval counter ... runs at rate */
+};
+
+struct katcp_listener{
+  unsigned int l_magic;
+  unsigned int l_port;
+  char *l_address;
+
+  struct katcp_group *l_group;
+};
+
+struct katcp_cmd_item{
+  /* a single command */
+  char *i_name;
+  char *i_help;
+  int (*i_call)(struct katcp_dispatch *d, int argc);
+  unsigned int i_flags; 
+  void *i_data;
+  void (*i_clear)(void *data);
+  int i_refs;
+};
+
+struct katcp_cmd_map{
+  /* "table" of commands */
+  char *m_name;
+  unsigned int m_refs;
+  struct avl_tree *m_tree;
+  struct katcp_cmd_item *m_fallback;
+};
+
+#define KATCP_SCOPE_INVALID    (-1)
+/* dpx-misc has a lookuptable based on this order */
+#define KATCP_SCOPE_SINGLE       0
+#define KATCP_SCOPE_GROUP        1
+#define KATCP_SCOPE_GLOBAL       2
+#define KATCP_MAX_SCOPE          3
 
 #define KATCP_MAP_UNSET        (-1)
 
@@ -431,26 +577,32 @@ struct katcp_arb{
 
 #define KATCP_SIZE_MAP  4
 
-#define KATCP_MAP_INNER_REPLY    4 
-#define KATCP_MAP_REMOTE_REPLY   5 
-
 #define KATCP_DIRECTION_INVALID (-1)
 
 #define KATCP_DIRECTION_INNER     0
 #define KATCP_DIRECTION_REMOTE    1
 
-#define KATCP_SIZE_DIRECTION      2
-
+/* discard entire pending set after this many queued elements */
+#define KATCP_FLUSH_DEFER         8
 
 struct katcp_group{
   /* a set of flats which belong together, probably spawned off the same listener, probably same set of commands, probably same "mode" */
   char *g_name;
+  unsigned int g_flags;
   struct katcp_cmd_map *g_maps[KATCP_SIZE_MAP];
 
   struct katcp_flat **g_flats;
   unsigned int g_count;
 
+  int g_log_level;
+  int g_scope;
+
   int g_use;             /* are we ref'ed by the listener */
+  int g_autoremove;      /* do we disappear if use and count are zero ? */
+
+  int g_flushdefer;      /* number of queued items after we cancel the lot */
+
+  struct katcp_region *g_region;
 };
 
 #define KATCP_REPLY_HANDLE_REPLIES   0x1
@@ -460,6 +612,9 @@ struct katcp_response_handler{
   unsigned int r_flags;
   char *r_message;
   int (*r_reply)(struct katcp_dispatch *d, int argc);
+  struct katcp_endpoint *r_issuer;
+  struct katcp_endpoint *r_recipient;
+  struct katcl_parse *r_initial;
 };
 
 #define KATCP_SIZE_REPLY         2
@@ -478,36 +633,53 @@ struct katcp_response_handler{
 
 #define KATCP_DPX_SEND_RESET      0x100  /* clear lock flag */
 
+#define KATCP_DEFER_OUTSIDE_REQUEST  0x1  /* stop handling outside requests, already have one */
+#define KATCP_DEFER_OWN_REQUEST      0x2  /* don't send further requests, other side already busy */
+
+#define KATCP_STALE_SENSOR_NAIVE     0x1  /* haven't issued a sensor-list, can't be out of date */
+#define KATCP_STALE_SENSOR_CURRENT   0x2  /* have done sensor-list recently */
+#define KATCP_STALE_SENSOR_STALE     0x3  /* things have changed since last sensor-list */
+#define KATCP_STALE_MASK_SENSOR      0x3  /* mask out sensor related data */
+
 struct katcp_flat{
   /* a client instance, intended to replace what was job and dispatch previously */
   unsigned int f_magic;
   char *f_name;          /* locate the thing by name */
 
-  int f_flags;           /* which directions can we do */
+  unsigned int f_flags;           /* which directions can we do */
 
   int f_state;           /* up, shutting down, etc */
-  int f_blocked;         /* TODO: shim, should be handled properly, maybe in line */
   int f_exit_code;       /* reported exit status */
 
   int f_log_level;       /* log level currently set */
 
-  struct katcp_endpoint *f_peer; /* queue for internal messages, can be from different senders */
-  struct katcp_endpoint *f_remote; /* queue for remote messages, all come in from fd via a line */
+  int f_scope;           /* how much we see */
+
+  unsigned int f_stale;          /* what is out of date */
+
+  unsigned int f_deferring;      /* status flags for requests outstanding */
+  struct katcl_gueue *f_defer;   /* deferred requests */
+  int f_max_defer;               /* worst case queue size */
+
+  struct katcp_endpoint *f_peer;   /* queue for all messages, can be from different senders */
+  struct katcp_endpoint *f_remote; /* queue for remote messages, used to make remote messages "fit" into peer queue */
 
   struct katcl_line *f_line;
   struct katcp_shared *f_shared;
 
+  struct katcl_parse *f_orx;     /* originating received message (needed for replies) */
   struct katcl_parse *f_rx;      /* received message */
-
   struct katcl_parse *f_tx;      /* message about to send */
-  unsigned int f_send;           /* message sending flags */
 
-  struct katcp_response_handler f_replies[KATCP_SIZE_DIRECTION];
-  int f_current_direction;
+  struct katcp_cmd_item *f_cmd;  /* command currently matched */
 
 #if 0
-  struct katcl_queue *f_backlog; /* backed up requests from the remote end, shouldn't happen */
+  unsigned int f_send;           /* message sending flags */
 #endif
+
+  struct katcp_response_handler f_replies[KATCP_SIZE_REPLY]; /* this should probably be a dynamic number */
+ 
+  struct katcp_endpoint *f_current_endpoint;
 
   struct katcp_cmd_map *f_maps[KATCP_SIZE_MAP];
   int f_current_map; 
@@ -519,7 +691,11 @@ struct katcp_flat{
   /* notices, sensors */
 
   /* a sensor could probably be a special type of notice */
+
+  struct katcp_region *f_region;
+  time_t f_start;
 };
+#endif
 
 #define KATCP_FLAT_STACK 4
 
@@ -574,12 +750,17 @@ struct katcp_shared{
   struct katcp_group **s_groups;
   struct katcp_group *s_fallback;
   unsigned int s_members;
+  unsigned int s_lock; /* can't call functions which mess with group pointers */
 
   struct katcp_flat **s_this;
   int s_level;
-  unsigned int s_stories;
+  int s_stories;
+
+  unsigned int s_changes;
 
   struct katcp_endpoint *s_endpoints;
+
+  struct katcp_region *s_region;
 
 #if 0
   int s_version_major;
@@ -596,8 +777,9 @@ struct katcp_shared{
   struct katcp_version **s_versions;
   unsigned int s_amount;
 
-  sigset_t s_mask_current, s_mask_previous;
-  struct sigaction s_action_current, s_action_previous;
+  sigset_t s_signal_mask;
+  struct sigaction s_child_current, s_child_previous;
+  struct sigaction s_term_current, s_term_previous;
   int s_restore_signals;
 
   fd_set s_read, s_write;
@@ -689,7 +871,8 @@ struct katcp_message{
 
 struct katcp_endpoint{
   unsigned int e_magic;
-  unsigned int e_flags; 
+  unsigned short e_freeable;
+  unsigned int e_state; 
   unsigned int e_refcount;
 
 #if 0
@@ -762,6 +945,9 @@ int match_sensor_list_katcp(struct katcp_dispatch *d, struct katcp_notice *n, vo
 char *code_to_name_katcm(int code);
 char **copy_vector_katcm(char **vector, unsigned int size);
 void delete_vector_katcm(char **vector, unsigned int size);
+char *default_message_type_katcm(char *string, int type);
+
+int print_time_delta_katcm(char *buffer, unsigned int len, time_t delta);
 
 /* timing support */
 int empty_timers_katcp(struct katcp_dispatch *d);
@@ -776,6 +962,7 @@ void forget_nonsense_katcp(struct katcp_dispatch *d, unsigned int index);
 /* how long to sleep between checks in nanoseconds */
 #define KATCP_WAITPID_POLL   250000000UL
 
+int term_signal_shared_katcp(struct katcp_shared *s);
 int child_signal_shared_katcp(struct katcp_shared *s);
 
 int reap_children_shared_katcp(struct katcp_dispatch *d, pid_t pid, int force);
@@ -800,13 +987,60 @@ int submit_to_job_katcp(struct katcp_dispatch *d, struct katcp_job *j, struct ka
 int notice_to_job_katcp(struct katcp_dispatch *d, struct katcp_job *j, struct katcp_notice *n);
 int ended_jobs_katcp(struct katcp_dispatch *d);
 
+/* cmd stuff */
+
+struct katcp_cmd_map *create_cmd_map_katcp(char *name);
+void destroy_cmd_map_katcp(struct katcp_cmd_map *m);
+void hold_cmd_map_katcp(struct katcp_cmd_map *m);
+struct katcp_cmd_map *duplicate_cmd_map_katcp(struct katcp_cmd_map *mo, char *name);
+struct katcp_cmd_item *find_cmd_map_katcp(struct katcp_cmd_map *m, char *name);
+int remove_cmd_map_katcp(struct katcp_cmd_map *m, char *name);
+void set_flag_cmd_item_katcp(struct katcp_cmd_item *ix, unsigned int flags);
+int set_help_cmd_item_katcp(struct katcp_cmd_item *ix, char *help);
+
 /* flat stuff */
 int run_flat_katcp(struct katcp_dispatch *d);
 int load_flat_katcp(struct katcp_dispatch *d);
 
-int init_flats_katcp(struct katcp_dispatch *d, unsigned int stories);
-void destroy_flats_katcp(struct katcp_dispatch *d);
-void destroy_groups_katcp(struct katcp_dispatch *d);
+
+/* duplex (flat+group) setup */
+int startup_duplex_katcp(struct katcp_dispatch *d, unsigned int stories);
+void shutdown_duplex_katcp(struct katcp_dispatch *d);
+
+#define KATCP_GROUP_OVERRIDE_SENSOR    0x10000
+#define KATCP_GROUP_OVERRIDE_BROADCAST 0x20000
+#define KATCP_GROUP_OVERRIDE_RELAYINFO 0x40000
+
+int switch_group_katcp(struct katcp_dispatch *d, struct katcp_flat *fx, struct katcp_group *gx);
+
+
+#define KATCP_FLAT_CONNECTING   0x01   /* wait for connect to complete */
+#define KATCP_FLAT_TOSERVER     0x02   /* direction */
+#define KATCP_FLAT_TOCLIENT     0x04   /* direction */
+#define KATCP_FLAT_HIDDEN       0x08   /* do not show up in client list */
+#if 0
+#define KATCP_FLAT_SEECHANGES   0x10   /* unused */
+#endif
+#define KATCP_FLAT_PREFIXED     0x20   /* sensors have prefix fields to them */
+#define KATCP_FLAT_RETAINFO     0x40   /* do not rewrite relayed info fields */
+
+#define KATCP_FLAT_SEESKATCP   0x100   /* sees katcp-specified inform messages */
+#define KATCP_FLAT_SEESADMIN   0x200   /* sees admin messages */
+#define KATCP_FLAT_SEESUSER    0x400   /* wants to see the content of broadcast_inform */
+
+int broadcast_pair_katcp(struct katcp_dispatch *d, char *inform, char *value, unsigned int flag);
+
+struct katcp_flat *create_flat_katcp(struct katcp_dispatch *d, int fd, unsigned int flags, char *name, struct katcp_group *g);
+struct katcp_flat *create_exec_flat_katcp(struct katcp_dispatch *d, unsigned int flags, char *name, struct katcp_group *gx, char **vector);
+int reconfigure_flat_katcp(struct katcp_dispatch *d, struct katcp_flat *fx, unsigned int flags);
+struct katcp_flat *is_ready_flat_katcp(struct katcp_dispatch *d, struct katcp_flat *fx);
+
+int trigger_connect_flat(struct katcp_dispatch *d, struct katcp_flat *fx);
+
+#define KATCP_ARB_TYPE_LISTENER 0xacce97
+
+struct katcp_arb *create_listen_flat_katcp(struct katcp_dispatch *d, char *name, unsigned int port, char *address, struct katcp_group *g);
+int destroy_listen_flat_katcp(struct katcp_dispatch *d, char *name);
 
 /* parse: setup */
 struct katcl_parse *create_parse_katcl();
@@ -828,7 +1062,11 @@ int add_hex_long_parse_katcl(struct katcl_parse *p, int flags, unsigned long v);
 int add_double_parse_katcl(struct katcl_parse *p, int flags, double v);
 #endif
 int add_buffer_parse_katcl(struct katcl_parse *p, int flags, void *buffer, unsigned int len);
+int add_timestamp_parse_katcl(struct katcl_parse *p, int flags, struct timeval *tv);
 int add_parameter_parse_katcl(struct katcl_parse *pd, int flags, struct katcl_parse *ps, unsigned int index);
+int add_parameter_parse_katcl(struct katcl_parse *pd, int flags, struct katcl_parse *ps, unsigned int index);
+int add_trailing_parse_katcl(struct katcl_parse *pd, int flags, struct katcl_parse *ps, unsigned int start);
+int add_end_parse_katcl(struct katcl_parse *p);
 
 int buffer_from_parse_katcl(struct katcl_parse *p, char *buffer, unsigned int len);
 
@@ -841,6 +1079,8 @@ int is_request_parse_katcl(struct katcl_parse *p);
 int is_reply_parse_katcl(struct katcl_parse *p);
 int is_inform_parse_katcl(struct katcl_parse *p);
 int is_null_parse_katcl(struct katcl_parse *p, unsigned int index);
+
+int is_reply_ok_parse_katcl(struct katcl_parse *p);
 
 char *get_string_parse_katcl(struct katcl_parse *p, unsigned int index);
 char *copy_string_parse_katcl(struct katcl_parse *p, unsigned int index);
@@ -859,9 +1099,9 @@ struct katcl_parse *ready_katcl(struct katcl_line *l);
 int add_vargs_parse_katcl(struct katcl_parse *p, int flags, char *fmt, va_list args);
 int add_args_parse_katcl(struct katcl_parse *p, int flags, char *fmt, ...);
 
-int dump_parse_katcl(struct katcl_parse *p, char *prefix, FILE *fp);
+#include <stdio.h>
 
-int finalize_parse_katcl(struct katcl_parse *p);
+int dump_parse_katcl(struct katcl_parse *p, char *prefix, FILE *fp);
 
 /* */
 int inform_client_connections_katcp(struct katcp_dispatch *d, char *type);
@@ -955,15 +1195,114 @@ int register_tag_katcp(struct katcp_dispatch *d, char *name, int level);
 /* endpoints: internal ********************/
 
 void run_endpoints_katcp(struct katcp_dispatch *d);
+void load_endpoints_katcp(struct katcp_dispatch *d);
+
 void release_endpoints_katcp(struct katcp_dispatch *d);
 
-int answer_endpoint_katcp(struct katcp_dispatch *d, struct katcp_endpoint *ep, struct katcl_parse *px);
-
 struct katcp_endpoint *create_endpoint_katcp(struct katcp_dispatch *d, int (*wake)(struct katcp_dispatch *d, struct katcp_endpoint *ep, struct katcp_message *msg, void *data), void (*release)(struct katcp_dispatch *d, void *data), void *data);
-void release_endpoint_katcp(struct katcp_dispatch *d, struct katcp_endpoint *ep);
+
+/* schedule destruction of endpoint, does not call release callback, to be called in destruction logic of entity owning the endpoint */
+int release_endpoint_katcp(struct katcp_dispatch *d, struct katcp_endpoint *ep);
+
+int flush_endpoint_katcp(struct katcp_dispatch *d, struct katcp_endpoint *ep);
+
+void close_sending_endpoint_katcp(struct katcp_dispatch *d, struct katcp_endpoint *ep);
+void close_receiving_endpoint_katcp(struct katcp_dispatch *d, struct katcp_endpoint *ep);
 
 void show_endpoint_katcp(struct katcp_dispatch *d, char *prefix, int level, struct katcp_endpoint *ep);
 
+int pending_endpoint_katcp(struct katcp_dispatch *d, struct katcp_endpoint *ep);
+
+
+/* up reference count of endpoint, does not include reference to actual owner */
+void reference_endpoint_katcp(struct katcp_dispatch *d, struct katcp_endpoint *ep);
+/* decrement refcount */
+void forget_endpoint_katcp(struct katcp_dispatch *d, struct katcp_endpoint *ep);
+
+/* misc duplex functions ******************/
+
+int code_from_scope_katcp(char *scope);
+char *string_from_scope_katcp(unsigned int scope);
+
+int fixup_timestamp_katcp(char *src, char *dst, int size);
+
+/* internal variable use ******************/
+
+#define KATCP_VRBL_DELIM_GROUP    '*'
+#define KATCP_VRBL_DELIM_TREE     ':'
+#define KATCP_VRBL_DELIM_ARRAY    '#' 
+#define KATCP_VRBL_DELIM_LOGIC    '.'
+
+#define KATCP_VRBL_DELIM_FORBID   '_'
+#define KATCP_VRBL_DELIM_SPACER   '-'
+
+struct katcp_region *create_region_katcp(struct katcp_dispatch *d);
+void destroy_region_katcp(struct katcp_dispatch *d, struct katcp_region *rx);
+
+struct katcp_vrbl *find_vrbl_katcp(struct katcp_dispatch *d, char *key);
+struct katcp_vrbl_payload *find_payload_katcp(struct katcp_dispatch *d, struct katcp_vrbl *vx, char *path);
+
+int type_payload_vrbl_katcp(struct katcp_dispatch *d, struct katcp_vrbl *vx, struct katcp_vrbl_payload *py);
+int find_type_vrbl_katcp(struct katcp_dispatch *d, struct katcp_vrbl *vx, char *path);
+char *path_suffix_vrbl_katcp(struct katcp_dispatch *d, char *path);
+
+struct katcp_vrbl *update_vrbl_katcp(struct katcp_dispatch *d, struct katcp_flat *fx, char *name, struct katcp_vrbl *vo, int clobber);
+
+int traverse_vrbl_katcp(struct katcp_dispatch *d, void *state, int (*callback)(struct katcp_dispatch *d, void *state, char *key, void *data));
+int for_all_flats_vrbl_katcp(struct katcp_dispatch *d, struct katcp_flat *fx, char *name, void *state, int (*callback)(struct katcp_dispatch *d, void *state, struct katcp_flat *fx));
+
+int hide_vrbl_katcp(struct katcp_dispatch *d, struct katcp_vrbl *vx);
+int show_vrbl_katcp(struct katcp_dispatch *d, struct katcp_vrbl *vx);
+
+/* variable payload manipulation */
+
+struct katcp_vrbl *scan_vrbl_katcp(struct katcp_dispatch *d, struct katcp_vrbl *vx, char *text, char *path, int create, unsigned int type);
+#if 0
+struct katcp_vrbl_payload *find_payload_vrbl_katcp(struct katcp_dispatch *d, struct katcp_vrbl *vx, char *path);
+#endif
+
+int add_payload_vrbl_katcp(struct katcp_dispatch *d, struct katcl_parse *px, int flags, struct katcp_vrbl *vx, struct katcp_vrbl_payload *py);
+int configure_vrbl_katcp(struct katcp_dispatch *d, struct katcp_vrbl *vx, unsigned int flags, void *state, int (*refresh)(struct katcp_dispatch *d, void *state, char *name, struct katcp_vrbl *vx), int (*change)(struct katcp_dispatch *d, void *state, char *name, struct katcp_vrbl *vx), void (*release)(struct katcp_dispatch *d, void *state, char *name, struct katcp_vrbl *vx));
+
+void destroy_vrbl_katcp(struct katcp_dispatch *d, char *name, struct katcp_vrbl *vx);
+/* variable type handling */
+
+unsigned int type_from_string_vrbl_katcp(struct katcp_dispatch *d, char *string);
+char *type_to_string_vrbl_katcp(struct katcp_dispatch *d, unsigned int type);
+ 
+/* type specific top-level utilities */
+
+struct katcp_vrbl *create_string_vrbl_katcp(struct katcp_dispatch *d, unsigned int flags, char *value);
+int make_string_vrbl_katcp(struct katcp_dispatch *d, struct katcp_group *gx, char *key, unsigned int flags, char *value);
+
+/* sensor specifics */
+
+unsigned int current_strategy_sensor_katcp(struct katcp_dispatch *d, struct katcp_vrbl *vx, struct katcp_flat *fx);
+
+int is_vrbl_sensor_katcp(struct katcp_dispatch *d, struct katcp_vrbl *vx);
+int is_ver_sensor_katcp(struct katcp_dispatch *d, struct katcp_vrbl *vx);
+
+char *strategy_to_string_sensor_katcp(struct katcp_dispatch *d, unsigned int strategy);
+int strategy_from_string_sensor_katcp(struct katcp_dispatch *d, char *name);
+
+int monitor_event_variable_katcp(struct katcp_dispatch *d, struct katcp_vrbl *vx, struct katcp_flat *fx);
+int forget_event_variable_katcp(struct katcp_dispatch *d, struct katcp_vrbl *vx, struct katcp_flat *fx);
+
+struct katcl_parse *make_sensor_katcp(struct katcp_dispatch *d, char *name, struct katcp_vrbl *vx, char *prefix);
+
+#define KATCP_NAGLE_CHANGE  500000    /* defer device-changes by this much (us) ... */
+int schedule_sensor_update_katcp(struct katcp_dispatch *d, char *name);
+
+void dump_variable_sensor_katcp(struct katcp_dispatch *d, struct katcp_vrbl *vx, int level);
+
+
+/* version callback */
+
+int version_generic_callback_katcp(struct katcp_dispatch *d, void *state, char *key, struct katcp_vrbl *vx);
+
+/******************************************/
+
+int prepend_generic_flat_katcp(struct katcp_dispatch *d, int reply);
 
 /******************************************/
 

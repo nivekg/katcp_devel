@@ -7,11 +7,13 @@
 #include <sysexits.h>
 #include <string.h>
 #include <ctype.h>
+#include <unistd.h>
+#include <fcntl.h>
+#include <sched.h>
+
 #include <sys/types.h>
 #include <sys/wait.h>
 #include <sys/socket.h>
-#include <unistd.h>
-#include <fcntl.h>
 
 #include <katpriv.h>
 #include <katcl.h>
@@ -47,32 +49,53 @@ void replace_argv(struct katcp_dispatch *d, char *str)
 
 struct katcp_job *run_child_process_tbs(struct katcp_dispatch *d, struct katcp_url *url, int (*call)(struct katcl_line *, void *), void *data, struct katcp_notice *n) 
 {
-  int fds[2];
+#define TINY_BUFFER  4
+  int fds[2], pfds[2], rr;
+  char buffer[TINY_BUFFER];
   pid_t pid;
   struct katcp_job *j;
   struct katcl_line *xl;
   int result;
 
-  if (socketpair(AF_UNIX, SOCK_STREAM, 0, fds) < 0) 
-    return NULL;
-  
-  pid = fork();
-  if (pid < 0){
-    close(fds[0]);
-    close(fds[1]);
+  if(socketpair(AF_UNIX, SOCK_STREAM, 0, fds) < 0){
     return NULL;
   }
 
-  if (pid > 0){
+  if(pipe(pfds) < 0){
+    pfds[0] = (-1);
+    pfds[1] = (-1);
+  }
+  
+  pid = fork();
+  if(pid < 0){
     close(fds[0]);
-    fcntl(fds[1], F_SETFD, FD_CLOEXEC);
+    close(fds[1]);
+
+    close(pfds[0]);
+    close(pfds[1]);
+
+    return NULL;
+  }
+
+  if(pid > 0){
 
 #ifdef DEBUG
     fprintf(stderr, "%s: in parent child has pid: %d\n", __func__, pid);
 #endif
 
+    close(fds[0]);
+    fcntl(fds[1], F_SETFD, FD_CLOEXEC);
+
+    if(pfds[0] >= 0){
+      close(pfds[1]);
+      rr = read(pfds[0], buffer, TINY_BUFFER);
+      close(pfds[0]);
+    }
+
+    sched_yield();
+
     j = create_job_katcp(d, url, pid, fds[1], 0, n);
-    if (j == NULL){
+    if(j == NULL){
       log_message_katcp(d, KATCP_LEVEL_INFO, NULL, "unable to allocate job logic so terminating child process");
       kill(pid, SIGTERM);
       close(fds[1]);
@@ -87,9 +110,13 @@ struct katcp_job *run_child_process_tbs(struct katcp_dispatch *d, struct katcp_u
   fprintf(stderr,"%s: in child: %d\n", __func__, getpid());
 #endif
 
+  if(pfds[0] >= 0){
+    close(pfds[0]);
+  }
+ 
   xl = create_katcl(fds[0]);
   close(fds[1]);
- 
+
 #if 0
   for (i=0; i<1024; i++)
     if (i != fds[0])
@@ -119,9 +146,14 @@ struct katcp_job *run_child_process_tbs(struct katcp_dispatch *d, struct katcp_u
   }
 #endif
 
+  if(pfds[1] >= 0){
+    close(pfds[1]);
+  }
+
   result = ((*call)(xl, data));
 
-  exit((result < 0) ? (result * -1) : result);
+  exit((result < 0) ? (result * (-1)) : result);
 
   return NULL;
+#undef TINY_BUFFER
 }
