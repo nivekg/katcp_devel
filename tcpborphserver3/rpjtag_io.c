@@ -5,6 +5,7 @@
 #include <fcntl.h>
 #include <string.h>
 #include <unistd.h>
+#include <bcm_host.h>
 //Credit for GPIO setup goes to http://elinux.org/RPi_Low-level_peripherals
 //
 // Set up a memory regions to access GPIO
@@ -35,7 +36,11 @@ int setup_io()
         printf("can't open /dev/mem \n");
         return -1;
     }
-    
+
+    peri_base = bcm_host_get_peripheral_address() + GPIO_OFFSET
+
+    fprintf("GPIO base is: %X\n", peri_base);
+      
     /* mmap GPIO */
     gpio_map = mmap(
         NULL,                //Any adddress in our space will do
@@ -43,7 +48,7 @@ int setup_io()
         PROT_READ|PROT_WRITE,// Enable reading & writting to mapped memory
         MAP_SHARED,          //Shared with other processes
         mem_fd,              //File to map
-        GPIO_BASE);
+        peri_base);
 
     close(mem_fd); //No need to keep mem_fd open after mmap
     
@@ -98,10 +103,11 @@ void send_cmd_no_tms(int iTDI)
     }
 
     //nop_sleep(WAIT);
-    GPIO_SET(JTAG_TCK);
+    //GPIO_SET(JTAG_TCK);
     //nop_sleep(WAIT);
-    GPIO_CLR(JTAG_TCK);
+    //GPIO_CLR(JTAG_TCK);
     //nop_sleep(WAIT);
+    tick_clk()
 }
 
 //void set_pin(int pin, int val)

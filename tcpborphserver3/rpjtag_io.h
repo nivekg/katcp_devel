@@ -7,12 +7,14 @@
 #include <fcntl.h>
 #include <string.h>
 #include <unistd.h>
+#include <bcm_host.h>
 
 #define PAGE_SIZE (4*1024)
 #define BLOCK_SIZE (4*1024)
 
 #define BCM2708_PERI_BASE        0x3F000000 // or for RPI 1 B+ 0x20000000
 #define GPIO_BASE                (BCM2708_PERI_BASE + 0x200000) /* GPIO controller */
+#define GPIO_OFFSET              0x200000
 
 // GPIO setup macros. Always use INP_GPIO(x) before using OUT_GPIO(x) or SET_GPIO_ALT(x,y)
 #define INP_GPIO(g) *(gpio+((g)/10)) &= ~(7<<(((g)%10)*3))
