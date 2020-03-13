@@ -10,7 +10,8 @@
 //
 // Set up a memory regions to access GPIO
 //
-int  mem_fd;
+int mem_fd;
+unsigned int peri_base;
 void *gpio_map;
 
 // I/O access
