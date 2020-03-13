@@ -37,7 +37,7 @@ int setup_io()
         return -1;
     }
 
-    peri_base = bcm_host_get_peripheral_address() + GPIO_OFFSET
+    peri_base = bcm_host_get_peripheral_address() + GPIO_OFFSET;
 
     fprintf("GPIO base is: %X\n", peri_base);
       
@@ -107,7 +107,7 @@ void send_cmd_no_tms(int iTDI)
     //nop_sleep(WAIT);
     //GPIO_CLR(JTAG_TCK);
     //nop_sleep(WAIT);
-    tick_clk()
+    tick_clk();
 }
 
 //void set_pin(int pin, int val)
